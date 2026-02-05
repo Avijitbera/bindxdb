@@ -197,3 +197,108 @@ func (r *HookRegistry) UnregisterHook(hookID string) error {
 
 	return nil
 }
+
+func (r *HookRegistry) UnregisterPluginHooks(pluginID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	registrations, exists := r.byPlugin[pluginID]
+	if !exists {
+		return nil
+	}
+	for _, reg := range registrations {
+		if hookRegs, exists := r.hooks[reg.HookType]; exists {
+			for i, hookReg := range hookRegs {
+				if hookReg.ID == reg.ID {
+					r.hooks[reg.HookType] = append(hookRegs[:i], hookRegs[i+1:]...)
+					break
+				}
+			}
+
+			if len(r.hooks[reg.HookType]) == 0 {
+				delete(r.hooks, reg.HookType)
+			}
+		}
+		delete(r.stats, reg.ID)
+	}
+	delete(r.byPlugin, pluginID)
+	return nil
+
+}
+
+func (r *HookRegistry) ExecuteHooks(
+	ctx context.Context,
+	hookType HookType,
+	data map[string]interface{},
+) error {
+	r.mu.RLock()
+	// defer r.mu.RLocker()
+	registrations, exists := r.hooks[hookType]
+	if !exists || len(registrations) == 0 {
+		r.mu.RUnlock()
+		return nil
+	}
+	registrationsCopy := make([]*HookRegistration, len(registrations))
+	copy(registrationsCopy, registrations)
+	r.mu.RUnlock()
+
+	var lastError error
+
+	for _, registration := range registrationsCopy {
+		if !registration.Enabled {
+			continue
+		}
+
+		hookCtx := &HookContext{
+			Context:   ctx,
+			HookType:  hookType,
+			Timestamp: time.Now().UnixNano(),
+			PluginID:  registration.PluginID,
+			Data:      data,
+			CanModify: true,
+		}
+
+		startTime := time.Now()
+		err := registration.Handler(hookCtx)
+		duration := time.Since(startTime)
+
+		r.recordHookExecution(registration.ID, duration, err)
+
+		if err != nil {
+			lastError = fmt.Errorf("hook %s failed: %w", registration.ID, err)
+
+			if hookCtx.StopChain {
+				break
+			}
+		}
+
+		if hookCtx.StopChain {
+			break
+		}
+
+		if hookCtx.Modified && hookCtx.Data != nil {
+			data = hookCtx.Data
+		}
+	}
+	return lastError
+
+}
+
+func (r *HookRegistry) recordHookExecution(hookID string, duration time.Duration, err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	stats, exists := r.stats[hookID]
+	if !exists {
+		stats = &HookStats{}
+		r.stats[hookID] = stats
+	}
+
+	stats.TotalCalls++
+	stats.TotalDuration += duration.Nanoseconds()
+	stats.LastCall = time.Now().UnixNano()
+
+	if err != nil {
+		stats.TotalErrors++
+	}
+}
