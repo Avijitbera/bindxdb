@@ -230,13 +230,13 @@ func (r *HookRegistry) ExecuteHooks(
 	ctx context.Context,
 	hookType HookType,
 	data map[string]interface{},
-) error {
+) (map[string]interface{}, error) {
 	r.mu.RLock()
 	// defer r.mu.RLocker()
 	registrations, exists := r.hooks[hookType]
 	if !exists || len(registrations) == 0 {
 		r.mu.RUnlock()
-		return nil
+		return nil, nil
 	}
 	registrationsCopy := make([]*HookRegistration, len(registrations))
 	copy(registrationsCopy, registrations)
@@ -280,8 +280,16 @@ func (r *HookRegistry) ExecuteHooks(
 			data = hookCtx.Data
 		}
 	}
-	return lastError
+	return data, lastError
 
+}
+
+func (r *HookRegistry) ExecuteHooksWithResult(
+	ctx context.Context,
+	hookType HookType,
+	data map[string]interface{},
+) (map[string]interface{}, error) {
+	return r.ExecuteHooks(ctx, hookType, data)
 }
 
 func (r *HookRegistry) recordHookExecution(hookID string, duration time.Duration, err error) {
@@ -301,4 +309,97 @@ func (r *HookRegistry) recordHookExecution(hookID string, duration time.Duration
 	if err != nil {
 		stats.TotalErrors++
 	}
+}
+
+func (r *HookRegistry) EnableHook(hookID string, enabled bool) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, registrations := range r.hooks {
+		for _, reg := range registrations {
+			if reg.ID == hookID {
+				reg.Enabled = enabled
+				return nil
+			}
+		}
+	}
+	return fmt.Errorf("hook %s not found", hookID)
+}
+
+func (r *HookRegistry) GetHookStats(hookID string) (*HookStats, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	stats, exists := r.stats[hookID]
+	if !exists {
+		return nil, fmt.Errorf("hook %s not found", hookID)
+	}
+
+	statsCopy := *stats
+
+	return &statsCopy, nil
+}
+
+func (r *HookRegistry) GetHooksByPlugin(pluginID string) []*HookRegistration {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	registrations, exists := r.byPlugin[pluginID]
+
+	if !exists {
+		return nil
+	}
+
+	result := make([]*HookRegistration, len(registrations))
+	copy(result, registrations)
+	return result
+}
+
+func (hc *HookContext) SetData(key string, value interface{}) {
+	if hc.Data == nil {
+		hc.Data = make(map[string]interface{})
+	}
+	hc.Data[key] = value
+	hc.Modified = true
+}
+
+func (hc *HookContext) GetData(key string) (interface{}, bool) {
+	if hc.Data == nil {
+		return nil, false
+	}
+	value, exists := hc.Data[key]
+	return value, exists
+}
+
+func (hc *HookContext) GetString(key string) (string, bool) {
+	value, exists := hc.GetData(key)
+	if !exists {
+		return "", false
+	}
+	str, ok := value.(string)
+	return str, ok
+}
+
+func (hc *HookContext) GetInt(key string) (int, bool) {
+	value, exists := hc.GetData(key)
+	if !exists {
+		return 0, false
+	}
+	switch v := value.(type) {
+	case int:
+		return v, true
+	case int64:
+		return int(v), true
+	case float64:
+		return int(v), true
+	default:
+		return 0, false
+	}
+}
+
+func (hc *HookContext) Stop() {
+	hc.StopChain = true
+}
+
+func (hc *HookContext) SetError(err error) {
+	hc.Error = err
 }
