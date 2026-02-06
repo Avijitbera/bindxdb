@@ -199,3 +199,21 @@ func countOpenFiles() int {
 
 	return len(files) - 1
 }
+
+// Stop forcibly stops the sandbox
+func (s *Sandbox) Stop() error {
+	s.mu.RLock()
+	cancel := s.cancel
+	s.mu.RUnlock()
+
+	if cancel != nil {
+		cancel()
+	}
+
+	select {
+	case <-s.done:
+		return nil
+	case <-time.After(5 * time.Second):
+		return fmt.Errorf("failed to stop sandbox within timeout")
+	}
+}
