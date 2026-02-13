@@ -113,7 +113,7 @@ type TableSchema struct {
 
 type ColumnDef struct {
 	Name          string
-	Type          string
+	Type          DataType
 	Nullable      bool
 	Default       interface{}
 	AutoIncrement bool
@@ -361,7 +361,7 @@ type EncryptionPlugin interface {
 }
 
 const (
-	OperatorEqual FilterOperator = iota
+	OperatorEquals FilterOperator = iota
 	OperatorNotEqual
 	OperatorGreaterThen
 	OperatorGreaterThenOrEqual
@@ -382,7 +382,7 @@ func (f *BasicFilter) Evaluate(record map[string]interface{}) (bool, error) {
 	}
 
 	switch f.Operator {
-	case OperatorEqual:
+	case OperatorEquals:
 		return value == f.Value, nil
 	case OperatorNotEqual:
 		return value != f.Value, nil
