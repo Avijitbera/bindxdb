@@ -35,6 +35,27 @@ type StorageEngine interface {
 	CheckIntegrity(table string) (bool, []string, error)
 }
 
+type DataType int
+
+const (
+	TypeUnknown DataType = iota
+	TypeInteger
+	TypeBigInt
+	TypeFloat
+	TypeDouble
+	TypeDecimal
+	TypeBoolean
+	TypeVarchar
+	TypeText
+	TypeBlob
+	TypeTimestamp
+	TypeDate
+	TypeTime
+	TypeJSON
+	TypeUUID
+	TypeCustom
+)
+
 type TableChange struct {
 	Type    TableChangeType
 	Column  *ColumnDef
@@ -91,10 +112,15 @@ type TableSchema struct {
 }
 
 type ColumnDef struct {
-	Name     string
-	Type     string
-	Nullable bool
-	Default  interface{}
+	Name          string
+	Type          string
+	Nullable      bool
+	Default       interface{}
+	AutoIncrement bool
+	PrimaryKey    bool
+	Unique        bool
+	ForeignKey    *ForeignKeyDef
+	Check         *CheckConstraint
 }
 
 type Iterator interface {
@@ -151,10 +177,14 @@ type AuthResult struct {
 }
 
 type FunctionDef struct {
-	Name       string
-	Arguments  []ArgumentDef
-	ReturnType string
-	Volatile   bool
+	Name          string
+	Arguments     []ArgumentDef
+	ReturnType    DataType
+	Volatile      bool
+	Deterministic bool
+	Aggregate     bool
+	Window        bool
+	Description   string
 }
 
 type ArgumentDef struct {
