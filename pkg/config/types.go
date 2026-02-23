@@ -101,17 +101,24 @@ func (e *MultiError) HasErrors() bool {
 }
 
 type SchemaNode struct {
-	Type                 string
-	Description          string
-	Default              interface{}
-	Required             bool
-	Secret               bool
-	Dynamic              bool
-	Min                  interface{}
-	Max                  interface{}
-	Pattern              string
-	Enum                 []interface{}
-	Properties           map[string]*SchemaNode
-	Items                *SchemaNode
-	AdditionalProperties *SchemaNode
+	Type                 string                 `json:"type"`
+	Description          string                 `json:"description"`
+	Default              interface{}            `json:"default,omitempty"`
+	Required             bool                   `json:"required,omitempty"`
+	Secret               bool                   `json:"secret,omitempty"`
+	Dynamic              bool                   `json:"dynamic,omitempty"`
+	Min                  interface{}            `json:"min,omitempty"`
+	Max                  interface{}            `json:"max,omitempty"`
+	Pattern              string                 `json:"pattern,omitempty"`
+	Enum                 []interface{}          `json:"enum,omitempty"`
+	Properties           map[string]*SchemaNode `json:"properties,omitempty"`
+	Items                *SchemaNode            `json:"items,omitempty"`
+	AdditionalProperties *SchemaNode            `json:"additionalProperties,omitempty"`
+}
+
+type ConfigSchema struct {
+	Version     string                 `json:"version"`
+	Description string                 `json:"description"`
+	Properties  map[string]*SchemaNode `json:"properties"`
+	Required    []string               `json:"required"`
 }

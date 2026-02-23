@@ -199,3 +199,28 @@ func (d *DynamicSource) Load(ctx context.Context) (map[string]interface{}, error
 	}
 	return result, nil
 }
+
+func (d *DynamicSource) Watch(ctx context.Context, onChange func(ConfigChange)) error {
+	go func() {
+		watchCh, err := d.backend.Watch(ctx, "/config/")
+		if err != nil {
+			return
+		}
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case data := <-watchCh:
+				onChange(ConfigChange{
+					Key:       "dynamic",
+					NewValue:  string(data),
+					Source:    SourceDynamic,
+					Timestamp: time.Now(),
+				})
+			}
+		}
+
+	}()
+	return nil
+}
