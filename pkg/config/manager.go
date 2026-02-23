@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
@@ -10,7 +11,7 @@ import (
 )
 
 type ConfigManager struct {
-	sources     []ConfigSource
+	sources     []ConfigSources
 	values      map[string]*ConfigValue
 	defaults    map[string]interface{}
 	validators  map[string][]ConfigValidator
@@ -19,7 +20,7 @@ type ConfigManager struct {
 	mu          sync.RWMutex
 	onChange    chan ConfigChange
 	ctx         context.Context
-	cancel      context.Context
+	cancel      context.CancelFunc
 	logger      Logger
 	secretStore SecretStore
 }
@@ -42,7 +43,7 @@ func NewConfigManager(logger Logger, secretStore SecretStore) *ConfigManager {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &ConfigManager{
-		sources:     make([]ConfigSource, 0),
+		sources:     make([]ConfigSources, 0),
 		values:      make(map[string]*ConfigValue),
 		defaults:    make(map[string]interface{}),
 		validators:  make(map[string][]ConfigValidator),
@@ -55,7 +56,7 @@ func NewConfigManager(logger Logger, secretStore SecretStore) *ConfigManager {
 	}
 }
 
-func (m *ConfigManager) AddSource(source ConfigSource) error {
+func (m *ConfigManager) AddSource(source ConfigSources) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -67,6 +68,219 @@ func (m *ConfigManager) AddSource(source ConfigSource) error {
 		}
 	}
 	return nil
+}
+
+func (m *ConfigManager) Get(key string) (interface{}, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	value, exists := m.values[key]
+	if !exists {
+		return nil, &ConfigError{
+			Key:     key,
+			Message: "key not found",
+		}
+	}
+
+	if value.IsSecret && m.secretStore != nil {
+		secretValue, err := m.secretStore.GetSecret(key)
+		if err == nil {
+			return secretValue, nil
+		}
+		m.logger.Warn("failed to get secret", "key", key, "error", err)
+	}
+	return value.Value, nil
+}
+
+func (m *ConfigManager) GetString(key string) (string, error) {
+	value, err := m.Get(key)
+	if err != nil {
+		return "", err
+	}
+	strValue, ok := value.(string)
+	if !ok {
+		return "", &ConfigError{
+			Key:     key,
+			Message: "value is not a string",
+		}
+	}
+	return strValue, nil
+}
+
+func (m *ConfigManager) GetInt(key string) (int, error) {
+	value, err := m.Get(key)
+	if err != nil {
+		return 0, err
+	}
+	switch v := value.(type) {
+	case int:
+		return v, nil
+	case float64:
+		return int(v), nil
+	case json.Number:
+		i, err := v.Int64()
+		if err != nil {
+			return 0, &ConfigError{
+				Key:     key,
+				Message: "cannot convert to int",
+			}
+		}
+		return int(i), nil
+	default:
+		return 0, &ConfigError{
+			Key:     key,
+			Message: fmt.Sprintf("value is not an int: %T", value),
+		}
+	}
+}
+
+func (m *ConfigManager) GetBool(key string) (bool, error) {
+	value, err := m.Get(key)
+	if err != nil {
+		return false, err
+	}
+	boolValue, ok := value.(bool)
+	if !ok {
+		return false, &ConfigError{
+			Key:     key,
+			Message: "value is not a bool",
+		}
+	}
+	return boolValue, nil
+}
+
+func (m *ConfigManager) GetDuration(key string) (time.Duration, error) {
+	value, err := m.Get(key)
+	if err != nil {
+		return 0, err
+	}
+
+	switch v := value.(type) {
+	case time.Duration:
+		return v, nil
+	case string:
+		return time.ParseDuration(v)
+	case int:
+		return time.Duration(v) * time.Second, nil
+	case float64:
+		return time.Duration(v) * time.Second, nil
+	default:
+		return 0, &ConfigError{
+			Key:     key,
+			Message: "cannot convert to duration",
+		}
+	}
+}
+
+func (m *ConfigManager) GetFloat(key string) (float64, error) {
+	value, err := m.Get(key)
+	if err != nil {
+		return 0, err
+	}
+
+	switch v := value.(type) {
+	case float64:
+		return v, nil
+	case int:
+		return float64(v), nil
+	case json.Number:
+		return v.Float64()
+	default:
+		return 0, &ConfigError{
+			Key:     key,
+			Message: "cannot convert to float",
+		}
+	}
+}
+
+func (m *ConfigManager) GetStringSlice(key string) ([]string, error) {
+	value, err := m.Get(key)
+	if err != nil {
+		return nil, err
+	}
+
+	switch v := value.(type) {
+	case []interface{}:
+		result := make([]string, len(v))
+		for i, item := range v {
+			str, ok := item.(string)
+			if !ok {
+				return nil, &ConfigError{
+					Key:     key,
+					Message: "slice contains non-string",
+				}
+			}
+			result[i] = str
+		}
+		return result, nil
+	case []string:
+		return v, nil
+	default:
+		return nil, &ConfigError{
+			Key:     key,
+			Message: "value is not string slice",
+		}
+	}
+}
+
+func (m *ConfigManager) Set(key string, value interface{},
+	source ConfigSource, dynamic bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	oldValue, exists := m.values[key]
+
+	newValue := &ConfigValue{
+		Value:     value,
+		Source:    source,
+		IsSet:     true,
+		IsDefault: false,
+		Timestamp: time.Now(),
+	}
+
+	if m.isSecretKey(key) {
+		newValue.IsSecret = true
+		if m.secretStore != nil {
+			strValue, ok := value.(string)
+			if ok {
+				if err := m.secretStore.SetSecret(key, strValue); err != nil {
+					m.logger.Error("failed to set secret", "key", key, "error", err)
+				}
+			}
+		}
+	}
+
+	m.values[key] = newValue
+
+	change := ConfigChange{
+		Key:       key,
+		OldValue:  nil,
+		NewValue:  value,
+		Source:    source,
+		Timestamp: time.Now(),
+	}
+
+	if exists {
+		change.OldValue = oldValue.Value
+	}
+	go m.notifyWatchers(change)
+	return nil
+}
+
+func (m *ConfigManager) AddDefault(key string, value interface{}) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.defaults[key] = value
+
+	if _, exists := m.values[key]; !exists {
+		m.values[key] = &ConfigValue{
+			Value:     value,
+			Source:    SourceDefault,
+			IsSet:     true,
+			IsDefault: true,
+			Timestamp: time.Now(),
+		}
+	}
 }
 
 func (m *ConfigManager) AddValidator(key string, validator ConfigValidator) {
