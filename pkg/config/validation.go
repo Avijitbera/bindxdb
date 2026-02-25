@@ -8,6 +8,7 @@ import (
 	"os"
 	"reflect"
 	"regexp"
+	"strconv"
 	"time"
 )
 
@@ -265,6 +266,60 @@ func (v *IPValidator) Validate(key string, value interface{}) error {
 		if !allowed {
 			return fmt.Errorf("%s: IP %q not in allowed CIDR ranges", key, str)
 		}
+	}
+	return nil
+}
+
+type PortValidator struct {
+	Min int
+	Max int
+}
+
+func (v *PortValidator) Validate(key string, value interface{}) error {
+	var port int
+
+	switch val := value.(type) {
+	case int:
+		port = val
+	case float64:
+		port = int(val)
+	case string:
+		p, err := strconv.Atoi(val)
+		if err != nil {
+			return fmt.Errorf("%s: invalid port number %q", key, val)
+		}
+		port = p
+	default:
+		return fmt.Errorf("%s: expected port number, got %T", key, value)
+
+	}
+	if port < v.Min || port > v.Max {
+		return fmt.Errorf("%s: port %d out of range [%d, %d]", key, port, v.Min, v.Max)
+	}
+	return nil
+}
+
+type CompositeValidator struct {
+	Validators []ConfigValidator
+}
+
+func (v *CompositeValidator) Validate(key string, value interface{}) error {
+	for _, validator := range v.Validators {
+		if err := validator.Validate(key, value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type ConditionalValidator struct {
+	Condition func(key string, value interface{}) bool
+	Validator ConfigValidator
+}
+
+func (v *ConditionalValidator) Validate(key string, value interface{}) error {
+	if v.Condition(key, value) {
+		return v.Validator.Validate(key, value)
 	}
 	return nil
 }
