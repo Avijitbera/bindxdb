@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	vault "github.com/hashicorp/vault/api"
 )
 
 type SecretStores interface {
@@ -188,6 +190,23 @@ func (s *FileSecretStore) DeleteSecret(key string) error {
 	return nil
 }
 
+func (s *FileSecretStore) ListSecrets() ([]string, error) {
+	files, err := ioutil.ReadDir(s.basePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read secret store directory: %w", err)
+	}
+
+	var secrets []string
+	for _, file := range files {
+		if !file.IsDir() && filepath.Ext(file.Name()) == ".enc" {
+			key := file.Name()[:len(file.Name())-4]
+			secrets = append(secrets, key)
+		}
+	}
+
+	return secrets, nil
+}
+
 func sanitizeKey(key string) string {
 	replacer := strings.NewReplacer(
 		"/", "_",
@@ -201,4 +220,115 @@ func sanitizeKey(key string) string {
 		"|", "_",
 	)
 	return replacer.Replace(key)
+}
+
+type VaultSecretStore struct {
+	client    *vault.Client
+	mountPath string
+	cache     map[string]cachedSecret
+	mu        sync.RWMutex
+	logger    Logger
+}
+
+func NewVaultSecretStore(address, token, mountPath string, logger Logger) (*VaultSecretStore, error) {
+	config := vault.DefaultConfig()
+	config.Address = address
+	client, err := vault.NewClient(config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Vault client: %w", err)
+	}
+	client.SetToken(token)
+	return &VaultSecretStore{
+		client:    client,
+		mountPath: mountPath,
+		cache:     make(map[string]cachedSecret),
+		logger:    logger,
+	}, nil
+}
+
+func (s *VaultSecretStore) GetSecret(key string) (string, error) {
+	s.mu.RLock()
+	cached, exists := s.cache[key]
+	s.mu.RUnlock()
+	if exists && cached.expiresAt.After(time.Now()) {
+		return cached.value, nil
+	}
+
+	secret, err := s.client.Logical().Read(fmt.Sprintf("%s/data/%s", s.mountPath, key))
+	if err != nil {
+		return "", fmt.Errorf("failed to read from Vault: %w", err)
+	}
+	if secret == nil || secret.Data == nil {
+		return "", fmt.Errorf("secret %s not found", key)
+	}
+	data, ok := secret.Data["data"].(map[string]interface{})
+	if !ok {
+		return "", fmt.Errorf("unexpected Vault response format")
+	}
+	value, ok := data["value"].(string)
+	if !ok {
+		return "", fmt.Errorf("secret value not found or not a string")
+	}
+	s.mu.Lock()
+	s.cache[key] = cachedSecret{
+		value:     value,
+		expiresAt: time.Now().Add(5 * time.Minute),
+	}
+	s.mu.Unlock()
+	return value, nil
+}
+
+func (s *VaultSecretStore) SetSecret(key string, value string) error {
+	data := map[string]interface{}{
+		"data": map[string]interface{}{
+			"value": value,
+		},
+	}
+
+	_, err := s.client.Logical().Write(fmt.Sprintf("%s/data/%s", s.mountPath, key), data)
+	if err != nil {
+		return fmt.Errorf("failed to write to Vault: %w", err)
+	}
+
+	s.mu.Lock()
+	s.cache[key] = cachedSecret{
+		value:     value,
+		expiresAt: time.Now().Add(5 * time.Minute),
+	}
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *VaultSecretStore) DeleteSecret(key string) error {
+	_, err := s.client.Logical().Delete(fmt.Sprintf("%s/data/%s", s.mountPath, key))
+	if err != nil {
+		return fmt.Errorf("failed to delete from Vault: %w", err)
+	}
+	s.mu.Lock()
+	delete(s.cache, key)
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *VaultSecretStore) ListSecrets() ([]string, error) {
+	secret, err := s.client.Logical().List(fmt.Sprintf("%s/metadata", s.mountPath))
+	if err != nil {
+		return nil, fmt.Errorf("failed to list secrets from Vault: %w", err)
+	}
+
+	if secret == nil || secret.Data == nil {
+		return nil, nil
+	}
+
+	keys, ok := secret.Data["keys"].([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("unexpected Vault response format")
+	}
+
+	result := make([]string, len(keys))
+	for i, key := range keys {
+		result[i] = key.(string)
+	}
+	return result, nil
+
 }
