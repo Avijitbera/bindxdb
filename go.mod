@@ -4,8 +4,11 @@ go 1.25.3
 
 require github.com/hashicorp/vault/api v1.22.0
 
+require golang.org/x/sys v0.34.0 // indirect
+
 require (
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
+	github.com/fsnotify/fsnotify v1.9.0
 	github.com/go-jose/go-jose/v4 v4.1.1 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
 	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect
