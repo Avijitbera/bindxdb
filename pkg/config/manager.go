@@ -70,6 +70,23 @@ func (m *ConfigManager) AddSource(source ConfigSources) error {
 	return nil
 }
 
+func (m *ConfigManager) SetDefault(key string, value interface{}) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.defaults[key] = value
+
+	if _, exists := m.values[key]; !exists {
+		m.values[key] = &ConfigValue{
+			Value:     value,
+			Source:    SourceDefault,
+			IsSet:     true,
+			IsDefault: true,
+			Timestamp: time.Now(),
+		}
+	}
+
+}
+
 func (m *ConfigManager) Get(key string) (interface{}, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
