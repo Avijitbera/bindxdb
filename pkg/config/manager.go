@@ -357,7 +357,7 @@ func (m *ConfigManager) Load(ctx context.Context) error {
 		m.applyConfig(config, source.Priority())
 	}
 
-	if err := m.validateAll(); err != nil {
+	if err := m.ValidateAll(); err != nil {
 		return fmt.Errorf("configuration validation failed: %w", err)
 	}
 	return nil
@@ -402,7 +402,7 @@ func (m *ConfigManager) applyConfig(config map[string]interface{}, priority int)
 
 }
 
-func (m *ConfigManager) validateAll() error {
+func (m *ConfigManager) ValidateAll() error {
 	var multiErr MultiError
 	for key, value := range m.values {
 		if !value.IsSet {
